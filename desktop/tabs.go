@@ -312,6 +312,38 @@ func cloneStringPtr(v *string) *string {
 	return &cp
 }
 
+// plannedFreshSessionIDFromPath returns the deterministic session id a
+// fresh desktop tab will bind under when the legacy transcript the
+// tab would otherwise continue from is missing on disk. It is the
+// basename (without .jsonl) of a legacy *.jsonl path produced via
+// agent.NewSessionPath. The v4 per-session directory the SessionService
+// will create via service.PrepareCreate matches BranchID(<legacy
+// jsonl>), which is the key importSourceForLegacy uses to recognize
+// the paired canonical store.
+//
+// Without this, desktop.BindFreshSession("") lets SessionService mint
+// a random id; the resulting v4 directory shares no name with the
+// legacy jsonl basename the tab persists, and the next
+// ContinueLegacySession call (e.g. when the tab rehydrates after a
+// window switch) fails to find the v4 manifest — leaving the user
+// staring at an empty start screen even though the session is still
+// alive on disk.
+//
+// Issue #10316.
+//
+// The helper accepts an already-computed agent.NewSessionPath result
+// rather than (dir, label) so callers and tests can share a single
+// timestamp — NewSessionPath's nanosecond suffix differs between two
+// back-to-back invocations and would race a comparison test.
+func plannedFreshSessionIDFromPath(fullPath string) string {
+	if strings.TrimSpace(fullPath) == "" {
+		return ""
+	}
+	base := filepath.Base(fullPath)
+	ext := filepath.Ext(base)
+	return strings.TrimSuffix(base, ext)
+}
+
 func cloneServerViewMap(in map[string]ServerView) map[string]ServerView {
 	out := make(map[string]ServerView, len(in))
 	for name, view := range in {
@@ -3767,10 +3799,10 @@ func (a *App) buildTabControllerWithContextCore(tab *WorkspaceTab, loadedSession
 			} else if !os.IsNotExist(statErr) {
 				bindErr = statErr
 			} else {
-				ref, bindErr = identity.BindFreshSession(buildCtx, "")
+				ref, bindErr = identity.BindFreshSession(buildCtx, plannedFreshSessionIDFromPath(agent.NewSessionPath(ctrl.SessionDir(), ctrl.Label())))
 			}
 		default:
-			ref, bindErr = identity.BindFreshSession(buildCtx, "")
+			ref, bindErr = identity.BindFreshSession(buildCtx, plannedFreshSessionIDFromPath(agent.NewSessionPath(ctrl.SessionDir(), ctrl.Label())))
 		}
 		if bindErr != nil {
 			a.recordTabStartupFailure(tab, buildGeneration, appCtx, friendlySessionLoadError(bindErr))
